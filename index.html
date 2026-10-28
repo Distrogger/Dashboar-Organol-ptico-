@@ -26,14 +26,14 @@
       <div>
         <div class="flex items-center gap-2">
           <span class="bg-blue-600 text-xs font-bold uppercase px-2.5 py-1 rounded">Control de Calidad</span>
-          <span class="text-slate-400 text-xs" id="statusCarga">Sincronizando y normalizando CSV...</span>
+          <span class="text-slate-400 text-xs" id="statusCarga">Buscando datos en GitHub...</span>
         </div>
         <h1 class="text-xl md:text-2xl font-bold mt-1">Visión Directiva: Calidad y Riesgo de Materia Prima</h1>
       </div>
       
       <div class="flex flex-wrap items-center gap-3">
         <label class="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg border border-slate-700 text-xs cursor-pointer">
-          <input type="checkbox" id="chkDeduplicar" checked class="rounded" onchange="applyFilters()">
+          <input type="checkbox" id="chkDeduplicar" checked class="rounded" onchange="applyFilters()" title="Filtra filas repetidas del mismo lote y piscina">
           <span>Deduplicar Lotes Exactos</span>
         </label>
         <label class="bg-slate-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg cursor-pointer flex items-center gap-2">
@@ -107,7 +107,7 @@
       </div>
     </div>
 
-    <!-- TAB 3: SCORECARD PROVEEDORES (ACTUALIZADO) -->
+    <!-- TAB 3: SCORECARD PROVEEDORES -->
     <div id="tab3" class="bg-white p-5 rounded-b-xl shadow-sm border border-amber-200 space-y-6 hidden">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Mejores -->
@@ -130,7 +130,6 @@
           <div class="overflow-x-auto">
             <table class="w-full text-left border-collapse text-xs">
               <thead class="bg-red-100 text-red-800 uppercase border-b border-red-300">
-                <!-- Se cambió Sabores Atípicos por Lotes -->
                 <tr><th class="p-2">Camaronera</th><th class="p-2 text-right">Lotes Analizados</th><th class="p-2 text-right">% Conforme</th></tr>
               </thead>
               <tbody id="tbodyPeores" class="divide-y divide-red-200 text-red-900"></tbody>
@@ -221,13 +220,19 @@
 
     window.onload = async () => {
       try {
-        const response = await fetch('./Consolidado_Organoleptico_2.csv');
-        if (!response.ok) throw new Error("No file");
-        Papa.parse(await response.text(), { 
+        // Se añade un parámetro cache falso temporal si GitHub está sirviendo una versión cacheada,
+        // pero la ruta estricta es fundamental. Respeta minúsculas y mayúsculas.
+        const response = await fetch('Consolidado_Organoleptico_2.csv', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const text = await response.text();
+        Papa.parse(text, { 
           header: true, delimiter: ";", skipEmptyLines: true, complete: res => initData(res.data) 
         });
       } catch (error) {
-        document.getElementById('statusCarga').textContent = "⚠️ Esperando CSV manual...";
+        console.error("Error al cargar automáticamente el CSV:", error);
+        document.getElementById('statusCarga').textContent = "⚠️ Error auto-carga. Usa botón de Backup manual.";
+        document.getElementById('statusCarga').classList.replace('text-slate-400', 'text-yellow-400');
       }
     };
 
@@ -238,7 +243,6 @@
       reader.readAsText(e.target.files[0]);
     }
 
-    // Función robusta para transformar texto/comas a números reales
     function toNumber(val) {
       if (val === null || val === undefined || val === '') return 0;
       if (typeof val === 'number') return val;
@@ -303,7 +307,7 @@
       }).filter(r => r.Lote !== '');
       
       document.getElementById('statusCarga').textContent = "✅ Base Sincronizada";
-      document.getElementById('statusCarga').classList.replace('text-slate-400', 'text-emerald-400');
+      document.getElementById('statusCarga').className = "text-emerald-400 text-xs font-bold";
       document.getElementById('mainContent').style.display = "block";
       populateSelects();
       applyFilters();
@@ -323,7 +327,7 @@
       if(Array.from(set).includes(val)) el.value = val;
     }
     
-    // Deduplicación Mejorada: Considera Lote + Fecha + Camaronera + Piscina para evitar borrar lotes de piscinas separadas.
+    // Deduplicación Mejorada
     function deduplicate(arr) {
       const seen = new Set();
       return arr.filter(item => { 
@@ -347,7 +351,7 @@
       currentDefectRecords = [];
       currentFlavorRecords = [];
       
-      // index sirve para aislar exactamente qué lote originó qué defecto (Crucial para repetidos)
+      // El índice permite que si dos lotes se llaman igual (ej. Lote 0) se sumen matemáticamente separados en los gráficos
       activeLots.forEach((lot, index) => {
         [1,2,3,4,5,6].forEach(m => {
           if(fMue !== 'ALL' && String(m) !== fMue) return;
@@ -382,7 +386,7 @@
       const lotesConAtipico = new Set(currentFlavorRecords.filter(r => r.EsAtipico).map(r => r._lotIndex)).size;
       document.getElementById('kpiSabores').textContent = lots.length ? ((lotesConAtipico / lots.length)*100).toFixed(1)+'%' : '0%';
 
-      // Gráficos de barras (Tab 1) utilizando _lotIndex para matemáticas exactas
+      // Gráficos de barras
       const lblLotes = lots.map(l=>l.Lote);
       const zns = ["Fresco y Sano", "Todo el Cuerpo (General)", "Cabeza (Cefalotórax)", "Cola (Abdomen)"];
       if(charts.loteStack) charts.loteStack.destroy();
@@ -426,7 +430,7 @@
       const tbP = document.getElementById('tbodyParetoList'); tbP.innerHTML = '';
       sorted.forEach(s => tbP.innerHTML += `<tr><td class="p-1.5">${s.p}</td><td class="p-1.5 text-right font-bold">${s.u}</td></tr>`);
 
-      // 4. Tab 3: SCORECARD PROVEEDORES (ACTUALIZADO A 5 ELEMENTOS Y MISMA ESTRUCTURA)
+      // 4. Tab 3: SCORECARD PROVEEDORES (ACTUALIZADO A 5 TOP)
       const provStats = {};
       lots.forEach((l, idx) => {
         if(!provStats[l.Camaronera]) provStats[l.Camaronera] = { lotes:0, unid:0, sano:0 };
@@ -442,7 +446,6 @@
         return p;
       });
 
-      // Extraer los top 5 de cada espectro
       const topMejores = [...provArr].sort((a,b) => b.pctSano - a.pctSano).slice(0, 5);
       const topPeores = [...provArr].sort((a,b) => a.pctSano - b.pctSano).slice(0, 5);
 
