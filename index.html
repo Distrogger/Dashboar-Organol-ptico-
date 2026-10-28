@@ -34,7 +34,7 @@
       <div class="flex flex-wrap items-center gap-3">
         <label class="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg border border-slate-700 text-xs cursor-pointer">
           <input type="checkbox" id="chkDeduplicar" checked class="rounded" onchange="applyFilters()">
-          <span>Deduplicar Lotes</span>
+          <span>Deduplicar Lotes Exactos</span>
         </label>
         <label class="bg-slate-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg cursor-pointer flex items-center gap-2">
           <span>🔄 Carga Manual (Backup)</span>
@@ -107,17 +107,17 @@
       </div>
     </div>
 
-    <!-- TAB 3: SCORECARD PROVEEDORES -->
+    <!-- TAB 3: SCORECARD PROVEEDORES (ACTUALIZADO) -->
     <div id="tab3" class="bg-white p-5 rounded-b-xl shadow-sm border border-amber-200 space-y-6 hidden">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Mejores -->
         <div class="bg-green-50 p-4 rounded-xl border border-green-200">
-          <h3 class="text-sm font-bold text-green-900 mb-1">🏆 Top 3: Mejores Camaroneras</h3>
+          <h3 class="text-sm font-bold text-green-900 mb-1">🏆 Top 5: Mejores Camaroneras</h3>
           <p class="text-[10px] text-green-700 mb-3">Proveedores con el mayor porcentaje de camarón Fresco y Sano.</p>
           <div class="overflow-x-auto">
             <table class="w-full text-left border-collapse text-xs">
               <thead class="bg-green-100 text-green-800 uppercase border-b border-green-300">
-                <tr><th class="p-2">Camaronera</th><th class="p-2 text-right">Lotes</th><th class="p-2 text-right">% Conforme</th></tr>
+                <tr><th class="p-2">Camaronera</th><th class="p-2 text-right">Lotes Analizados</th><th class="p-2 text-right">% Conforme</th></tr>
               </thead>
               <tbody id="tbodyMejores" class="divide-y divide-green-200 text-green-900"></tbody>
             </table>
@@ -125,12 +125,13 @@
         </div>
         <!-- Peores -->
         <div class="bg-red-50 p-4 rounded-xl border border-red-200">
-          <h3 class="text-sm font-bold text-red-900 mb-1">🚨 Alerta: Proveedores Críticos</h3>
-          <p class="text-[10px] text-red-700 mb-3">Proveedores con menor conformidad o mayor volumen de sabores atípicos.</p>
+          <h3 class="text-sm font-bold text-red-900 mb-1">🚨 Alerta: Proveedores Críticos (Top 5)</h3>
+          <p class="text-[10px] text-red-700 mb-3">Proveedores con el menor porcentaje de conformidad.</p>
           <div class="overflow-x-auto">
             <table class="w-full text-left border-collapse text-xs">
               <thead class="bg-red-100 text-red-800 uppercase border-b border-red-300">
-                <tr><th class="p-2">Camaronera</th><th class="p-2 text-right">% Conforme</th><th class="p-2 text-right">Sabores Atípicos (Unid)</th></tr>
+                <!-- Se cambió Sabores Atípicos por Lotes -->
+                <tr><th class="p-2">Camaronera</th><th class="p-2 text-right">Lotes Analizados</th><th class="p-2 text-right">% Conforme</th></tr>
               </thead>
               <tbody id="tbodyPeores" class="divide-y divide-red-200 text-red-900"></tbody>
             </table>
@@ -220,7 +221,7 @@
 
     window.onload = async () => {
       try {
-        const response = await fetch('./Consolidado_Organoleptico.csv');
+        const response = await fetch('./Consolidado_Organoleptico_2.csv');
         if (!response.ok) throw new Error("No file");
         Papa.parse(await response.text(), { 
           header: true, delimiter: ";", skipEmptyLines: true, complete: res => initData(res.data) 
@@ -237,18 +238,19 @@
       reader.readAsText(e.target.files[0]);
     }
 
+    // Función robusta para transformar texto/comas a números reales
     function toNumber(val) {
-      if (!val) return 0;
+      if (val === null || val === undefined || val === '') return 0;
       if (typeof val === 'number') return val;
-      return Number(val.replace(',', '.')) || 0;
+      const parsed = parseFloat(String(val).replace(',', '.'));
+      return isNaN(parsed) ? 0 : parsed;
     }
 
-    // Parseo de fechas simples asumiendo DD/MM/YYYY para ordenar
     function parseDate(dateStr) {
       if(!dateStr) return new Date(0);
       const parts = dateStr.split('/');
       if(parts.length === 3) return new Date(parts[2], parts[1]-1, parts[0]);
-      return new Date(dateStr); // fallback
+      return new Date(dateStr);
     }
 
     function initData(rows) {
@@ -321,9 +323,15 @@
       if(Array.from(set).includes(val)) el.value = val;
     }
     
+    // Deduplicación Mejorada: Considera Lote + Fecha + Camaronera + Piscina para evitar borrar lotes de piscinas separadas.
     function deduplicate(arr) {
       const seen = new Set();
-      return arr.filter(item => { const k = `${item.Lote}_${item.Fecha}`; if(seen.has(k)) return false; seen.add(k); return true; });
+      return arr.filter(item => { 
+        const k = `${item.Lote}_${item.Fecha}_${item.Camaronera}_${item.Piscina}`; 
+        if(seen.has(k)) return false; 
+        seen.add(k); 
+        return true; 
+      });
     }
 
     function applyFilters() {
@@ -339,15 +347,16 @@
       currentDefectRecords = [];
       currentFlavorRecords = [];
       
-      activeLots.forEach(lot => {
+      // index sirve para aislar exactamente qué lote originó qué defecto (Crucial para repetidos)
+      activeLots.forEach((lot, index) => {
         [1,2,3,4,5,6].forEach(m => {
           if(fMue !== 'ALL' && String(m) !== fMue) return;
           Object.entries(lot.defectos[m]).forEach(([param, unid]) => {
-            currentDefectRecords.push({ Lote: lot.Lote, Camaronera: lot.Camaronera, Fecha: lot.Fecha, Temperatura: lot.Temperatura, Muestra: m, Parametro: param, Zona: ANATOMIA_MAP[param], Unidades: unid, EsDefecto: param !== "Camarón Fresco y Sano" });
+            currentDefectRecords.push({ _lotIndex: index, Lote: lot.Lote, Camaronera: lot.Camaronera, Fecha: lot.Fecha, Temperatura: lot.Temperatura, Muestra: m, Parametro: param, Zona: ANATOMIA_MAP[param], Unidades: unid, EsDefecto: param !== "Camarón Fresco y Sano" });
           });
         });
         lot.sabores.forEach(s => {
-          currentFlavorRecords.push({ Lote: lot.Lote, Camaronera: lot.Camaronera, TipoProd: lot.Tipo, Fecha: lot.Fecha, ...s });
+          currentFlavorRecords.push({ _lotIndex: index, Lote: lot.Lote, Camaronera: lot.Camaronera, TipoProd: lot.Tipo, Fecha: lot.Fecha, ...s });
         });
       });
 
@@ -355,7 +364,6 @@
     }
 
     function renderDashboard(lots) {
-      // 1. KPIs Generales
       const totDefUnid = currentDefectRecords.reduce((a,b)=>a+b.Unidades, 0);
       const sumZ = z => currentDefectRecords.filter(r=>r.Zona===z).reduce((a,b)=>a+b.Unidades, 0);
       const pct = v => totDefUnid > 0 ? ((v/totDefUnid)*100).toFixed(1)+'%' : '0%';
@@ -371,21 +379,20 @@
       document.getElementById('kpiTempAlert').textContent = maxT > 4 ? "⚠️ Excede cadena frío" : "✅ Frío OK";
       document.getElementById('kpiTempAlert').className = maxT > 4 ? "text-[10px] font-bold mt-1 text-red-600" : "text-[10px] font-bold mt-1 text-green-600";
 
-      const lotesConAtipico = new Set(currentFlavorRecords.filter(r => r.EsAtipico).map(r => r.Lote)).size;
+      const lotesConAtipico = new Set(currentFlavorRecords.filter(r => r.EsAtipico).map(r => r._lotIndex)).size;
       document.getElementById('kpiSabores').textContent = lots.length ? ((lotesConAtipico / lots.length)*100).toFixed(1)+'%' : '0%';
 
-      // 2. Tab 1: Físico Stacked
+      // Gráficos de barras (Tab 1) utilizando _lotIndex para matemáticas exactas
       const lblLotes = lots.map(l=>l.Lote);
       const zns = ["Fresco y Sano", "Todo el Cuerpo (General)", "Cabeza (Cefalotórax)", "Cola (Abdomen)"];
       if(charts.loteStack) charts.loteStack.destroy();
       charts.loteStack = new Chart(document.getElementById('chartLoteStack'), {
-        type:'bar', data: { labels: lblLotes, datasets: zns.map(z => ({ label:z, backgroundColor:ZONE_COLORS[z], data: lots.map(l => {
-          const lRecs = currentDefectRecords.filter(r=>r.Lote===l.Lote); const tot=lRecs.reduce((a,b)=>a+b.Unidades,0);
+        type:'bar', data: { labels: lblLotes, datasets: zns.map(z => ({ label:z, backgroundColor:ZONE_COLORS[z], data: lots.map((l, idx) => {
+          const lRecs = currentDefectRecords.filter(r=>r._lotIndex===idx); const tot=lRecs.reduce((a,b)=>a+b.Unidades,0);
           return tot>0 ? (lRecs.filter(r=>r.Zona===z).reduce((a,b)=>a+b.Unidades,0)/tot*100).toFixed(1) : 0;
         })}))}, options: { scales:{x:{stacked:true},y:{stacked:true,max:100}}, maintainAspectRatio:false }
       });
 
-      // Gráfico de Tendencia de Calidad por Fecha
       const fechasUnicas = [...new Set(lots.map(l => l.Fecha))].sort((a,b) => parseDate(a) - parseDate(b));
       const tendenciaData = fechasUnicas.map(f => {
         const recsDia = currentDefectRecords.filter(r => r.Fecha === f);
@@ -399,12 +406,10 @@
         options: { scales: { y: { min: 0, max: 100 } }, maintainAspectRatio: false }
       });
 
-      // 3. Tab 2: Pareto
       const defRecs = currentDefectRecords.filter(r=>r.EsDefecto);
       const grouped = {};
       defRecs.forEach(r => { if(!grouped[r.Parametro]) grouped[r.Parametro] = { u:0, z:r.Zona }; grouped[r.Parametro].u += r.Unidades; });
       const sorted = Object.entries(grouped).map(([p,o]) => ({ p, u:o.u, z:o.z })).sort((a,b) => b.u - a.u);
-      
       const totPar = sorted.reduce((a,b)=>a+b.u, 0);
       let cum = 0;
       const cumPct = sorted.map(s => { cum+=s.u; return totPar>0 ? (cum/totPar)*100 : 0; });
@@ -421,16 +426,14 @@
       const tbP = document.getElementById('tbodyParetoList'); tbP.innerHTML = '';
       sorted.forEach(s => tbP.innerHTML += `<tr><td class="p-1.5">${s.p}</td><td class="p-1.5 text-right font-bold">${s.u}</td></tr>`);
 
-      // 4. Tab 3: Scorecard Proveedores (NUEVO)
+      // 4. Tab 3: SCORECARD PROVEEDORES (ACTUALIZADO A 5 ELEMENTOS Y MISMA ESTRUCTURA)
       const provStats = {};
-      lots.forEach(l => {
-        if(!provStats[l.Camaronera]) provStats[l.Camaronera] = { lotes:0, unid:0, sano:0, atipicos:0 };
+      lots.forEach((l, idx) => {
+        if(!provStats[l.Camaronera]) provStats[l.Camaronera] = { lotes:0, unid:0, sano:0 };
         provStats[l.Camaronera].lotes++;
-        const pRecs = currentDefectRecords.filter(r => r.Lote === l.Lote);
-        const fRecs = currentFlavorRecords.filter(r => r.Lote === l.Lote && r.EsAtipico);
+        const pRecs = currentDefectRecords.filter(r => r._lotIndex === idx);
         provStats[l.Camaronera].unid += pRecs.reduce((a,b)=>a+b.Unidades, 0);
         provStats[l.Camaronera].sano += pRecs.filter(r=>!r.EsDefecto).reduce((a,b)=>a+b.Unidades, 0);
-        provStats[l.Camaronera].atipicos += fRecs.reduce((a,b)=>a+b.Unidades, 0);
       });
 
       const provArr = Object.keys(provStats).map(c => {
@@ -439,14 +442,15 @@
         return p;
       });
 
-      const topMejores = [...provArr].sort((a,b) => b.pctSano - a.pctSano).slice(0, 3);
-      const topPeores = [...provArr].sort((a,b) => a.pctSano - b.pctSano).slice(0, 3);
+      // Extraer los top 5 de cada espectro
+      const topMejores = [...provArr].sort((a,b) => b.pctSano - a.pctSano).slice(0, 5);
+      const topPeores = [...provArr].sort((a,b) => a.pctSano - b.pctSano).slice(0, 5);
 
       const tbMejores = document.getElementById('tbodyMejores'); tbMejores.innerHTML = '';
       topMejores.forEach(p => tbMejores.innerHTML += `<tr><td class="p-2 font-bold">${p.name}</td><td class="p-2 text-right">${p.lotes}</td><td class="p-2 text-right font-bold">${p.pctSano.toFixed(1)}%</td></tr>`);
       
       const tbPeores = document.getElementById('tbodyPeores'); tbPeores.innerHTML = '';
-      topPeores.forEach(p => tbPeores.innerHTML += `<tr><td class="p-2 font-bold">${p.name}</td><td class="p-2 text-right font-bold">${p.pctSano.toFixed(1)}%</td><td class="p-2 text-right font-bold text-red-700">${p.atipicos}</td></tr>`);
+      topPeores.forEach(p => tbPeores.innerHTML += `<tr><td class="p-2 font-bold">${p.name}</td><td class="p-2 text-right">${p.lotes}</td><td class="p-2 text-right font-bold text-red-700">${p.pctSano.toFixed(1)}%</td></tr>`);
 
       // 5. Tab 4: Riesgo Sensorial
       const atipicos = currentFlavorRecords.filter(r => r.EsAtipico);
@@ -476,12 +480,12 @@
       });
 
       // 6. Tab 5: Correlaciones
-      const corrData = lots.map(l => {
-        const lRecs = currentDefectRecords.filter(r=>r.Lote===l.Lote);
+      const corrData = lots.map((l, idx) => {
+        const lRecs = currentDefectRecords.filter(r=>r._lotIndex===idx);
         const tot = lRecs.reduce((a,b)=>a+b.Unidades, 0);
         const defPct = tot>0 ? (lRecs.filter(r=>r.EsDefecto).reduce((a,b)=>a+b.Unidades,0)/tot*100) : 0;
         const flacPct = tot>0 ? (lRecs.filter(r=>r.Parametro==='Camarón Flácido').reduce((a,b)=>a+b.Unidades,0)/tot*100) : 0;
-        const sabs = currentFlavorRecords.filter(r=>r.Lote===l.Lote && r.EsAtipico).reduce((a,b)=>a+b.Unidades, 0);
+        const sabs = currentFlavorRecords.filter(r=>r._lotIndex===idx && r.EsAtipico).reduce((a,b)=>a+b.Unidades, 0);
         return { t: l.Temperatura, dp: defPct, fp: flacPct, su: sabs, lote: l.Lote };
       }).filter(d => d.t > 0);
 
@@ -500,8 +504,8 @@
 
     function exportCSV(records, filename) {
       if(!records.length) return;
-      const headers = Object.keys(records[0]).join(',');
-      const rows = records.map(r => Object.values(r).map(v => `"${v}"`).join(',')).join('\n');
+      const headers = Object.keys(records[0]).filter(h => h !== '_lotIndex').join(',');
+      const rows = records.map(r => Object.keys(r).filter(k => k !== '_lotIndex').map(k => `"${r[k]}"`).join(',')).join('\n');
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob(["\uFEFF" + headers + '\n' + rows], {type: 'text/csv;charset=utf-8;'}));
       a.download = filename; a.click();
